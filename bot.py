@@ -3,8 +3,13 @@ import logging
 import shutil
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters,
-    CallbackQueryHandler, ConversationHandler, CallbackContext
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
 )
 from py7zr import SevenZipFile
 import pyminizip
@@ -57,7 +62,7 @@ def split_file(file_path):
     os.remove(file_path)
 
 # Start Command
-async def start(update: Update, context: CallbackContext) -> int:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     if user_id not in AUTHORIZED_USERS:
         await update.message.reply_text("🚫 You are not authorized!")
@@ -71,7 +76,7 @@ async def start(update: Update, context: CallbackContext) -> int:
     return RECEIVING_FILES
 
 # File Handler
-async def receive_file(update: Update, context: CallbackContext) -> None:
+async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in AUTHORIZED_USERS:
         return
@@ -84,7 +89,7 @@ async def receive_file(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(f"🗂 File saved! Total files: {len(os.listdir(user_dir))}")
 
 # Compression Type Selection
-async def choose_compress_type(update: Update, context: CallbackContext) -> int:
+async def choose_compress_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     
@@ -96,7 +101,7 @@ async def choose_compress_type(update: Update, context: CallbackContext) -> int:
     return COMPRESS_TYPE
 
 # Password Handling
-async def ask_password(update: Update, context: CallbackContext) -> int:
+async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     context.user_data['compress_type'] = query.data
@@ -104,13 +109,13 @@ async def ask_password(update: Update, context: CallbackContext) -> int:
     return PASSWORD
 
 # Archive Name Handling
-async def ask_archive_name(update: Update, context: CallbackContext) -> int:
+async def ask_archive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['password'] = update.message.text
     await update.message.reply_text("✏️ Enter archive name (without extension):")
     return ARCHIVE_NAME
 
 # Compress & Send
-async def compress_and_send(update: Update, context: CallbackContext) -> int:
+async def compress_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     user_dir = get_user_dir(user_id)
     files = [os.path.join(user_dir, f) for f in os.listdir(user_dir)]
@@ -153,26 +158,24 @@ async def compress_and_send(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def main() -> None:
-    updater = Updater(TOKEN)
-    dp = updater.dispatcher
+    application = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             RECEIVING_FILES: [
-                MessageHandler(Filters.document, receive_file),
-                CallbackQueryHandler(choose_compress_type, pattern='done')
+                MessageHandler(filters.Document.ALL, receive_file),
+                CallbackQueryHandler(choose_compress_type, pattern='^done$')
             ],
             COMPRESS_TYPE: [CallbackQueryHandler(ask_password)],
-            PASSWORD: [MessageHandler(Filters.text & ~Filters.command, ask_archive_name)],
-            ARCHIVE_NAME: [MessageHandler(Filters.text & ~Filters.command, compress_and_send)]
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_archive_name)],
+            ARCHIVE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, compress_and_send)]
         },
         fallbacks=[]
     )
 
-    dp.add_handler(conv_handler)
-    updater.start_polling()
-    updater.idle()
+    application.add_handler(conv_handler)
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
