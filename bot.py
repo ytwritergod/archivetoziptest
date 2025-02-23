@@ -139,16 +139,22 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if the message contains a document, photo, or video
     if update.message.document:
         file = update.message.document
+        file_name = file.file_name
     elif update.message.photo:
         file = update.message.photo[-1]  # Get the highest resolution photo
+        file_name = f"photo_{file.file_unique_id}.jpg"
     elif update.message.video:
         file = update.message.video
+        file_name = file.file_name if file.file_name else f"video_{file.file_unique_id}.mp4"
     else:
         await update.message.reply_text("❌ Unsupported file type.")
         return
 
+    # Log file details
+    logger.info(f"Received file: {file_name} (Type: {file.__class__.__name__})")
+
     # Download the file
-    file_path = os.path.join(DOWNLOAD_DIR, f"{file.file_id}_{file.file_name if hasattr(file, 'file_name') else file.file_unique_id}.dat")
+    file_path = os.path.join(DOWNLOAD_DIR, file_name)
     await file.get_file().download_to_drive(file_path)
 
     # Store file path
@@ -156,7 +162,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data[user_id] = {"files": []}
     user_data[user_id]["files"].append(file_path)
 
-    await update.message.reply_text(f"🗃️ File received: {file.file_name if hasattr(file, 'file_name') else 'file'}")
+    await update.message.reply_text(f"🗃️ File received: {file_name}")
 
 # Main function
 def main():
