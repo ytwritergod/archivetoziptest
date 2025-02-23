@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-AUTHORIZED_USERS = {123456789}  # Add your Telegram user ID here
+AUTHORIZED_USERS = {7821276186}  # Add your Telegram user ID here
 DOWNLOAD_DIR = "downloads"
 ZIP_DIR = "zips"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
