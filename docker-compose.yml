@@ -5,4 +5,4 @@ services:
     container_name: advanced-zip-bot
     restart: always
     environment:
-      - BOT_TOKEN=YOUR_BOT_TOKEN
+      - BOT_TOKEN=7234996868:AAEdI_qls3jQRlDVZ0EDRuCT-eFVCnJETCY
