@@ -8,7 +8,6 @@ from telegram.ext import (
 )
 from py7zr import SevenZipFile
 import pyminizip
-from pysplit import Splitter
 from dotenv import load_dotenv
 
 # Load Environment Variables
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Bot States
 RECEIVING_FILES, COMPRESS_TYPE, PASSWORD, ARCHIVE_NAME = range(4)
 TEMP_DIR = "temp_files"
-MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+CHUNK_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
 # Helper Functions
 def clean_user_data(user_id):
@@ -38,6 +37,24 @@ def get_user_dir(user_id):
     user_dir = os.path.join(TEMP_DIR, str(user_id))
     os.makedirs(user_dir, exist_ok=True)
     return user_dir
+
+def split_file(file_path):
+    part_number = 1
+    base_name = os.path.basename(file_path)
+    directory = os.path.dirname(file_path)
+    
+    with open(file_path, 'rb') as f:
+        while True:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            part_name = f"{base_name}.part{part_number:03d}"
+            part_path = os.path.join(directory, part_name)
+            with open(part_path, 'wb') as chunk_file:
+                chunk_file.write(chunk)
+            yield part_path
+            part_number += 1
+    os.remove(file_path)
 
 # Start Command
 async def start(update: Update, context: CallbackContext) -> int:
@@ -92,13 +109,6 @@ async def ask_archive_name(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("✏️ Enter archive name (without extension):")
     return ARCHIVE_NAME
 
-# File Splitting Function
-def split_large_file(file_path):
-    splitter = Splitter(file_path)
-    split_prefix = f"{file_path}.part"
-    splitter.split(MAX_SIZE, split_prefix=split_prefix)
-    return sorted([f for f in os.listdir(os.path.dirname(file_path)) if f.startswith(os.path.basename(split_prefix))])
-
 # Compress & Send
 async def compress_and_send(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
@@ -119,22 +129,24 @@ async def compress_and_send(update: Update, context: CallbackContext) -> int:
                     archive.write(file, os.path.basename(file))
 
         # Split and Send
-        if os.path.getsize(archive_path) > MAX_SIZE:
-            parts = split_large_file(archive_path)
-            for part in parts:
-                part_path = os.path.join(user_dir, part)
+        if os.path.getsize(archive_path) > CHUNK_SIZE:
+            for part_path in split_file(archive_path):
                 with open(part_path, 'rb') as f:
-                    await update.message.reply_document(document=f, caption=f"📤 Part: {part}")
-                os.remove(part_path)
-            os.remove(archive_path)
+                    await update.message.reply_document(
+                        document=f,
+                        caption=f"📤 Part: {os.path.basename(part_path)}"
+                    )
         else:
             with open(archive_path, 'rb') as f:
-                await update.message.reply_document(document=f, caption="📤 Your compressed file!")
+                await update.message.reply_document(
+                    document=f,
+                    caption="📤 Your compressed file!"
+                )
             os.remove(archive_path)
 
     except Exception as e:
-        logger.error(f"Compression error: {str(e)}")
-        await update.message.reply_text("❌ Error processing files. Please try again.")
+        logger.error(f"Error: {str(e)}")
+        await update.message.reply_text("❌ Processing failed. Please try again.")
     finally:
         clean_user_data(user_id)
     
