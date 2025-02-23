@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  bot:
+    build: .
+    container_name: advanced-zip-bot
+    restart: always
+    environment:
+      - BOT_TOKEN=YOUR_BOT_TOKEN
