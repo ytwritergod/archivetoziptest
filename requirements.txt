@@ -1,3 +1,5 @@
 python-telegram-bot==20.0
 py7zr==0.20.0
-python-dotenv==0.21.0
+pyminizip==0.2.6
+split-file==0.1.1
+python-dotenv==0.19.2
