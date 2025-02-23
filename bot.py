@@ -2,7 +2,6 @@ import os
 import logging
 import zipfile
 import py7zr
-import shutil
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -39,7 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "📤 Send me files to zip. When done, type /done.",
+        "📤 Send me files (images, videos, or documents) to zip. When done, type /done.",
         reply_markup=ReplyKeyboardMarkup([["/done"]]),
     )
 
@@ -130,25 +129,34 @@ async def create_archive(update: Update, user_id: int):
         os.remove(archive_path)
         user_data.pop(user_id, None)
 
-# Handle incoming documents
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handle incoming files (images, videos, documents)
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in AUTHORIZED_USERS:
         await update.message.reply_text("🚫 You are not authorized to use this bot.")
         return
 
-    file = await update.message.document.get_file()
+    # Check if the message contains a document, photo, or video
+    if update.message.document:
+        file = update.message.document
+    elif update.message.photo:
+        file = update.message.photo[-1]  # Get the highest resolution photo
+    elif update.message.video:
+        file = update.message.video
+    else:
+        await update.message.reply_text("❌ Unsupported file type.")
+        return
 
     # Download the file
-    file_path = os.path.join(DOWNLOAD_DIR, f"{file.file_id}_{file.file_name}")
-    await file.download_to_drive(file_path)
+    file_path = os.path.join(DOWNLOAD_DIR, f"{file.file_id}_{file.file_name if hasattr(file, 'file_name') else file.file_unique_id}.dat")
+    await file.get_file().download_to_drive(file_path)
 
     # Store file path
     if user_id not in user_data:
         user_data[user_id] = {"files": []}
     user_data[user_id]["files"].append(file_path)
 
-    await update.message.reply_text(f"🗃️ File received: {file.file_name}")
+    await update.message.reply_text(f"🗃️ File received: {file.file_name if hasattr(file, 'file_name') else 'file'}")
 
 # Main function
 def main():
@@ -178,7 +186,7 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    application.add_handler(MessageHandler(filters.Document.ALL | filters.Photo.ALL | filters.Video.ALL, handle_file))
 
     # Start the bot
     application.run_polling()
