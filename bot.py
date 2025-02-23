@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 from py7zr import SevenZipFile
 import pyminizip
-from split_file import split
+from pysplit import Splitter
 from dotenv import load_dotenv
 
 # Load Environment Variables
@@ -17,15 +17,16 @@ TOKEN = os.getenv("BOT_TOKEN")
 AUTHORIZED_USERS = set(map(int, os.getenv("AUTHORIZED_USERS", "").split(',')))
 
 # Logging Setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Bot States
 RECEIVING_FILES, COMPRESS_TYPE, PASSWORD, ARCHIVE_NAME = range(4)
 TEMP_DIR = "temp_files"
-
-# Ensure Temp Directory Exists
-os.makedirs(TEMP_DIR, exist_ok=True)
+MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
 # Helper Functions
 def clean_user_data(user_id):
@@ -39,11 +40,12 @@ def get_user_dir(user_id):
     return user_dir
 
 # Start Command
-async def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     if user_id not in AUTHORIZED_USERS:
         await update.message.reply_text("🚫 You are not authorized!")
-        return
+        return ConversationHandler.END
+    
     clean_user_data(user_id)
     await update.message.reply_text(
         "📁 Send me files to compress. Click /done when finished!",
@@ -65,7 +67,7 @@ async def receive_file(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(f"🗂 File saved! Total files: {len(os.listdir(user_dir))}")
 
 # Compression Type Selection
-async def choose_compress_type(update: Update, context: CallbackContext) -> None:
+async def choose_compress_type(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
     
@@ -77,7 +79,7 @@ async def choose_compress_type(update: Update, context: CallbackContext) -> None
     return COMPRESS_TYPE
 
 # Password Handling
-async def ask_password(update: Update, context: CallbackContext) -> None:
+async def ask_password(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
     context.user_data['compress_type'] = query.data
@@ -85,14 +87,20 @@ async def ask_password(update: Update, context: CallbackContext) -> None:
     return PASSWORD
 
 # Archive Name Handling
-async def ask_archive_name(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
+async def ask_archive_name(update: Update, context: CallbackContext) -> int:
     context.user_data['password'] = update.message.text
     await update.message.reply_text("✏️ Enter archive name (without extension):")
     return ARCHIVE_NAME
 
+# File Splitting Function
+def split_large_file(file_path):
+    splitter = Splitter(file_path)
+    split_prefix = f"{file_path}.part"
+    splitter.split(MAX_SIZE, split_prefix=split_prefix)
+    return sorted([f for f in os.listdir(os.path.dirname(file_path)) if f.startswith(os.path.basename(split_prefix))])
+
 # Compress & Send
-async def compress_and_send(update: Update, context: CallbackContext) -> None:
+async def compress_and_send(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     user_dir = get_user_dir(user_id)
     files = [os.path.join(user_dir, f) for f in os.listdir(user_dir)]
@@ -101,37 +109,39 @@ async def compress_and_send(update: Update, context: CallbackContext) -> None:
     password = context.user_data['password']
     archive_path = os.path.join(user_dir, archive_name)
 
-    # Compress Files
     try:
+        # Create Archive
         if context.user_data['compress_type'] == 'zip':
             pyminizip.compress_multiple(files, [], archive_path, password, 5)
         elif context.user_data['compress_type'] == '7z':
             with SevenZipFile(archive_path, 'w', password=password) as archive:
                 for file in files:
                     archive.write(file, os.path.basename(file))
+
+        # Split and Send
+        if os.path.getsize(archive_path) > MAX_SIZE:
+            parts = split_large_file(archive_path)
+            for part in parts:
+                part_path = os.path.join(user_dir, part)
+                with open(part_path, 'rb') as f:
+                    await update.message.reply_document(document=f, caption=f"📤 Part: {part}")
+                os.remove(part_path)
+            os.remove(archive_path)
+        else:
+            with open(archive_path, 'rb') as f:
+                await update.message.reply_document(document=f, caption="📤 Your compressed file!")
+            os.remove(archive_path)
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Compression failed: {e}")
-        return ConversationHandler.END
-
-    # Split if >2GB
-    max_size = 2 * 1024 * 1024 * 1024  # 2GB
-    if os.path.getsize(archive_path) > max_size:
-        split(archive_path, max_size, newline=True)
-        os.remove(archive_path)
-        parts = [f for f in os.listdir(user_dir) if f.startswith(archive_name)]
-        for part in parts:
-            with open(os.path.join(user_dir, part), 'rb') as f:
-                await update.message.reply_document(document=f, caption=f"📤 Part: {part}")
-    else:
-        with open(archive_path, 'rb') as f:
-            await update.message.reply_document(document=f, caption="📤 Your compressed file!")
-
-    clean_user_data(user_id)
+        logger.error(f"Compression error: {str(e)}")
+        await update.message.reply_text("❌ Error processing files. Please try again.")
+    finally:
+        clean_user_data(user_id)
+    
     return ConversationHandler.END
 
-# Main Function
 def main() -> None:
-    updater = Updater(TOKEN, use_context=True)
+    updater = Updater(TOKEN)
     dp = updater.dispatcher
 
     conv_handler = ConversationHandler(
