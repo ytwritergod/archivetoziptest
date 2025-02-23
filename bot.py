@@ -1,201 +1,156 @@
 import os
 import logging
-import zipfile
-import py7zr
-from telegram import Update, ReplyKeyboardMarkup
+import shutil
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-    ConversationHandler,
+    Updater, CommandHandler, MessageHandler, Filters,
+    CallbackQueryHandler, ConversationHandler, CallbackContext
 )
+from py7zr import SevenZipFile
+import pyminizip
+from split_file import split
+from dotenv import load_dotenv
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+# Load Environment Variables
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+AUTHORIZED_USERS = set(map(int, os.getenv("AUTHORIZED_USERS", "").split(',')))
+
+# Logging Setup
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-AUTHORIZED_USERS = {7821276186}  # Add your Telegram user ID here
-DOWNLOAD_DIR = "downloads"
-ZIP_DIR = "zips"
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+# Bot States
+RECEIVING_FILES, COMPRESS_TYPE, PASSWORD, ARCHIVE_NAME = range(4)
+TEMP_DIR = "temp_files"
 
-# Conversation states
-SELECT_COMPRESSION, SET_PASSWORD, SET_NAME, CONFIRM = range(4)
+# Ensure Temp Directory Exists
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-# Store user data
-user_data = {}
+# Helper Functions
+def clean_user_data(user_id):
+    user_dir = os.path.join(TEMP_DIR, str(user_id))
+    if os.path.exists(user_dir):
+        shutil.rmtree(user_dir)
 
-# Command: /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+def get_user_dir(user_id):
+    user_dir = os.path.join(TEMP_DIR, str(user_id))
+    os.makedirs(user_dir, exist_ok=True)
+    return user_dir
+
+# Start Command
+async def start(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
     if user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("🚫 You are not authorized to use this bot.")
+        await update.message.reply_text("🚫 You are not authorized!")
         return
-
+    clean_user_data(user_id)
     await update.message.reply_text(
-        "📤 Send me files (images, videos, or documents) to zip. When done, type /done.",
-        reply_markup=ReplyKeyboardMarkup([["/done"]]),
+        "📁 Send me files to compress. Click /done when finished!",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Done ✅", callback_data='done')]])
     )
+    return RECEIVING_FILES
 
-# Command: /done
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+# File Handler
+async def receive_file(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
     if user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("🚫 You are not authorized to use this bot.")
         return
 
-    if user_id not in user_data or not user_data[user_id].get("files"):
-        await update.message.reply_text("📭 No files received. Send files first.")
-        return
+    user_dir = get_user_dir(user_id)
+    file = await update.message.document.get_file()
+    file_path = os.path.join(user_dir, update.message.document.file_name)
+    await file.download_to_drive(file_path)
+    
+    await update.message.reply_text(f"🗂 File saved! Total files: {len(os.listdir(user_dir))}")
 
-    await update.message.reply_text(
-        "🗜️ Choose compression type:",
-        reply_markup=ReplyKeyboardMarkup([["zip", "7z"]]),
-    )
-    return SELECT_COMPRESSION
+# Compression Type Selection
+async def choose_compress_type(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("ZIP 🗃", callback_data='zip'),
+         InlineKeyboardButton("7Z 🗜", callback_data='7z')]
+    ]
+    await query.edit_message_text("📦 Choose compression format:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return COMPRESS_TYPE
 
-# Handle compression type selection
-async def select_compression(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    compression_type = update.message.text.lower()
-    if compression_type not in ["zip", "7z"]:
-        await update.message.reply_text("❌ Invalid option. Choose 'zip' or '7z'.")
-        return SELECT_COMPRESSION
+# Password Handling
+async def ask_password(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    context.user_data['compress_type'] = query.data
+    await query.edit_message_text("🔒 Enter password for archive:")
+    return PASSWORD
 
-    user_data[user_id]["compression"] = compression_type
-    await update.message.reply_text("🔒 Set a password for the archive (or type 'none' for no password):")
-    return SET_PASSWORD
+# Archive Name Handling
+async def ask_archive_name(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    context.user_data['password'] = update.message.text
+    await update.message.reply_text("✏️ Enter archive name (without extension):")
+    return ARCHIVE_NAME
 
-# Handle password setting
-async def set_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    password = update.message.text
-    if password.lower() == "none":
-        password = None
+# Compress & Send
+async def compress_and_send(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    user_dir = get_user_dir(user_id)
+    files = [os.path.join(user_dir, f) for f in os.listdir(user_dir)]
+    
+    archive_name = f"{update.message.text}.{context.user_data['compress_type']}"
+    password = context.user_data['password']
+    archive_path = os.path.join(user_dir, archive_name)
 
-    user_data[user_id]["password"] = password
-    await update.message.reply_text("📝 Set a custom name for the archive (without extension):")
-    return SET_NAME
+    # Compress Files
+    try:
+        if context.user_data['compress_type'] == 'zip':
+            pyminizip.compress_multiple(files, [], archive_path, password, 5)
+        elif context.user_data['compress_type'] == '7z':
+            with SevenZipFile(archive_path, 'w', password=password) as archive:
+                for file in files:
+                    archive.write(file, os.path.basename(file))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Compression failed: {e}")
+        return ConversationHandler.END
 
-# Handle custom name setting
-async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    custom_name = update.message.text
-    user_data[user_id]["custom_name"] = custom_name
+    # Split if >2GB
+    max_size = 2 * 1024 * 1024 * 1024  # 2GB
+    if os.path.getsize(archive_path) > max_size:
+        split(archive_path, max_size, newline=True)
+        os.remove(archive_path)
+        parts = [f for f in os.listdir(user_dir) if f.startswith(archive_name)]
+        for part in parts:
+            with open(os.path.join(user_dir, part), 'rb') as f:
+                await update.message.reply_document(document=f, caption=f"📤 Part: {part}")
+    else:
+        with open(archive_path, 'rb') as f:
+            await update.message.reply_document(document=f, caption="📤 Your compressed file!")
 
-    # Create the archive
-    await create_archive(update, user_id)
+    clean_user_data(user_id)
     return ConversationHandler.END
 
-# Create the archive
-async def create_archive(update: Update, user_id: int):
-    files = user_data[user_id]["files"]
-    compression = user_data[user_id]["compression"]
-    password = user_data[user_id].get("password")
-    custom_name = user_data[user_id].get("custom_name", "archive")
+# Main Function
+def main() -> None:
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    archive_path = os.path.join(ZIP_DIR, f"{custom_name}.{compression}")
-
-    try:
-        if compression == "zip":
-            with zipfile.ZipFile(archive_path, "w") as zipf:
-                for file_path in files:
-                    zipf.write(file_path, arcname=os.path.basename(file_path))
-                if password:
-                    zipf.setpassword(password.encode())
-        elif compression == "7z":
-            with py7zr.SevenZipFile(archive_path, "w", password=password) as seven_zipf:
-                for file_path in files:
-                    seven_zipf.write(file_path, arcname=os.path.basename(file_path))
-
-        # Calculate size
-        archive_size = os.path.getsize(archive_path)
-        await update.message.reply_text(f"📦 Archive created! Size: {archive_size / 1024 / 1024:.2f} MB")
-
-        # Send the archive
-        await update.message.reply_document(document=open(archive_path, "rb"))
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error creating archive: {e}")
-    finally:
-        # Clean up
-        for file_path in files:
-            os.remove(file_path)
-        os.remove(archive_path)
-        user_data.pop(user_id, None)
-
-# Handle incoming files (images, videos, documents)
-async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("🚫 You are not authorized to use this bot.")
-        return
-
-    # Check if the message contains a document, photo, or video
-    if update.message.document:
-        file = update.message.document
-        file_name = file.file_name
-    elif update.message.photo:
-        file = update.message.photo[-1]  # Get the highest resolution photo
-        file_name = f"photo_{file.file_unique_id}.jpg"
-    elif update.message.video:
-        file = update.message.video
-        file_name = file.file_name if file.file_name else f"video_{file.file_unique_id}.mp4"
-    else:
-        await update.message.reply_text("❌ Unsupported file type.")
-        return
-
-    # Log file details
-    logger.info(f"Received file: {file_name} (Type: {file.__class__.__name__})")
-
-    # Download the file
-    file_path = os.path.join(DOWNLOAD_DIR, file_name)
-    await file.get_file().download_to_drive(file_path)
-
-    # Store file path
-    if user_id not in user_data:
-        user_data[user_id] = {"files": []}
-    user_data[user_id]["files"].append(file_path)
-
-    await update.message.reply_text(f"🗃️ File received: {file_name}")
-
-# Main function
-def main():
-    # Get the bot token from environment variables
-    bot_token = os.getenv("BOT_TOKEN")
-    if not bot_token:
-        raise ValueError("Please set the BOT_TOKEN environment variable.")
-
-    # Create necessary directories
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    os.makedirs(ZIP_DIR, exist_ok=True)
-
-    # Build the application
-    application = ApplicationBuilder().token(bot_token).build()
-
-    # Conversation handler
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("done", done)],
+        entry_points=[CommandHandler('start', start)],
         states={
-            SELECT_COMPRESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_compression)],
-            SET_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_password)],
-            SET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_name)],
+            RECEIVING_FILES: [
+                MessageHandler(Filters.document, receive_file),
+                CallbackQueryHandler(choose_compress_type, pattern='done')
+            ],
+            COMPRESS_TYPE: [CallbackQueryHandler(ask_password)],
+            PASSWORD: [MessageHandler(Filters.text & ~Filters.command, ask_archive_name)],
+            ARCHIVE_NAME: [MessageHandler(Filters.text & ~Filters.command, compress_and_send)]
         },
-        fallbacks=[],
+        fallbacks=[]
     )
 
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO | filters.VIDEO, handle_file))
+    dp.add_handler(conv_handler)
+    updater.start_polling()
+    updater.idle()
 
-    # Start the bot
-    application.run_polling()
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
