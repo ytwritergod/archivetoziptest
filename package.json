@@ -4,10 +4,11 @@
   "description": "Telegram Bot to send password-protected ZIPs up to 2GB",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "build": "yarn install || npm install"
   },
   "dependencies": {
-    "telegram": "^3.7.0",
+    "telegram": "^4.15.0",
     "node-telegram-bot-api": "^0.61.0",
     "adm-zip": "^0.5.10",
     "dotenv": "^16.0.3"
