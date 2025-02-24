@@ -1,12 +1,8 @@
-# Advanced Zip Bot
-
-A Telegram bot for zipping files with advanced features.
+# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot
+Directly send password-protected ZIPs up to 2GB via Telegram using MTProto.
 
 ## Features
-- Accepts multiple files and waits for a "done" command.
-- Allows choosing between `zip` and `7z` formats.
-- Adds password protection to archives.
-- Lets users set custom names for archives.
-- Splits files larger than 2GB into smaller parts.
-- Works only in direct messages and for authorized users.
-- Uses custom emojis for a better user experience.
+- 🔐 Password-protected ZIPs (AES-256)
+- 🚫 Authorization System
+- 📦 2GB+ File Support
+- 🔄 No File Chunking
