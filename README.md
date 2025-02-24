@@ -1,4 +1,4 @@
-# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot# Telegram FileZipper Bot
+# Telegram FileZipper Bot
 Directly send password-protected ZIPs up to 2GB via Telegram using MTProto.
 
 ## Features
