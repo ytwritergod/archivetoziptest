@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const { NewMessage } = require('telegram/events');
 const AdmZip = require('adm-zip');
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +14,9 @@ const authorizedUsers = new Set(process.env.AUTHORIZED_USERS.split(',').map(Numb
 
 // MTProto क्लाइंट
 const stringSession = new StringSession('');
-const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+const client = new TelegramClient(stringSession, apiId, apiHash, {
+  connectionRetries: 5,
+});
 
 // बॉट इनिशियलाइज़ेशन
 const bot = new TelegramBot(botToken, { polling: true });
